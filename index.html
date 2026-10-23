@@ -25,7 +25,7 @@ a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
 </head>
 <body>
 <h1>Painel de Publicações do Laboratório</h1>
-<p class="mut">Nomes: aba “Página1” da planilha. Publicações: OpenAlex (automático) + aba “Publicações” da planilha (registro manual, para o que o OpenAlex não indexa, como congressos nacionais).</p>
+<p class="mut">Nomes: aba “Página1” da planilha. Publicações: OpenAlex (automático via ORCID) + aba “Publicações” da planilha (registro manual).</p>
 <button id="go">Atualizar levantamento</button> <button id="csv" disabled>Exportar CSV</button>
 <span id="st" class="mut"></span>
 
@@ -36,13 +36,11 @@ a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
 <script>
 // ===== CONFIGURAÇÃO (edite apenas aqui) =====
 const CONFIG = {
-  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas", // ID da planilha (compartilhada como "Qualquer pessoa com o link")
+  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas", // ID da planilha
   ABA_PESSOAS_GID: "0",          // gid da aba com os nomes (Página1)
-  ABA_PUBLICACOES: "Publicações", // nome da aba de registro manual (opcional)
+  ABA_PUBLICACOES: "Publicações", // nome da aba de registro manual
   EMAIL: "felipefurlaneto01@gmail.com" // opcional, melhora a fila de requisições do OpenAlex
 };
-// Aba 1 (pessoas): Nome Como Publicado | Nível Academico | Ano de Ingresso | ORCID (se aplicavel) | Google Acadêmico (opcional)
-// Aba "Publicações" (manual): Pessoa | Título | Ano | Tipo | Veículo | Link ou DOI
 // ============================================
 const $=id=>document.getElementById(id);
 const API="https://api.openalex.org";
@@ -66,9 +64,16 @@ function parseCSV(t){
   if(c||r.length){r.push(c);out.push(r)}
   return out;
 }
-async function getJSON(u){
-  try{const r=await fetch(u);if(!r.ok)return null;return await r.json()}catch(e){return null}
+
+// Função genérica para buscar JSON (agora com suporte a cabeçalhos, necessário para a API do ORCID)
+async function getJSON(u, opts = {}){
+  try{
+    const r = await fetch(u, opts);
+    if(!r.ok) return null;
+    return await r.json();
+  }catch(e){return null}
 }
+
 async function loadPeople(){
   const res=await fetch(`${GV}&gid=${CONFIG.ABA_PESSOAS_GID}`);
   if(!res.ok)throw new Error("Erro HTTP "+res.status+" ao ler a planilha.");
@@ -77,7 +82,6 @@ async function loadPeople(){
   const h=(t[0]||[]).map(norm);
   const col=k=>h.findIndex(x=>x.includes(k));
   
-  // Correção dos cabeçalhos da sua planilha
   const iN=col("nome como"), iL=col("nivel"), iA=col("ingresso"), iO=col("orcid"), iG=col("academico");
   
   if(iN<0||iA<0)throw new Error("Link não devolveu CSV: "+txt.slice(0,80).replace(/</g,"&lt;"));
@@ -106,7 +110,7 @@ async function loadManual(){
     const h=(t[0]||[]).map(norm);
     const col=(...ks)=>h.findIndex(x=>ks.some(k=>x.includes(k)));
     const iP=col("pessoa","nome"),iT=col("titulo"),iA=col("ano"),iTp=col("tipo"),iV=col("veiculo","revista","congresso"),iL=col("link","doi");
-    if(iP<0||iT<0)return[]; // aba inexistente ou com outro formato
+    if(iP<0||iT<0)return[]; 
     return t.slice(1).filter(r=>r[iP]&&r[iT]&&r[iT].trim()).map(r=>({
       pessoa:norm(r[iP]),titulo:r[iT].trim(),ano:parseInt(r[iA])||0,
       tipo:tipoManual(iTp>=0?r[iTp]:""),veiculo:(iV>=0&&r[iV]||"").trim()||"—",
@@ -114,28 +118,49 @@ async function loadManual(){
   }catch(e){return[]}
 }
 
-// BUSCA EXCLUSIVA PELO ORCID
+// 1. BUSCA OS DOIS DIRETAMENTE NA API DO ORCID
 async function findAuthor(p){
   if(!p.orcid) return null;
   const idOrcid = p.orcid.trim().replace(/^https?:\/\/orcid.org\//,"").replace(/\s/g, "");
-  return { id: idOrcid, nome: p.nome, exato: true };
+  
+  // Busca os trabalhos no ORCID (exige o header Accept: application/json)
+  const r = await getJSON(`https://pub.orcid.org/v3.0/${idOrcid}/works`, {headers: {Accept: "application/json"}});
+  
+  let dois = [];
+  if(r && r.group) {
+    r.group.forEach(g => {
+      g["work-summary"].forEach(ws => {
+        if(ws["external-ids"] && ws["external-ids"]["external-id"]) {
+          const d = ws["external-ids"]["external-id"].find(e => e["external-id-type"] === "doi");
+          if(d) dois.push(d["external-id-value"]);
+        }
+      });
+    });
+  }
+  
+  return { id: idOrcid, nome: p.nome, exato: true, dois: dois };
 }
 
-async function findWorks(orcid,ano){
-  let page=1,all=[];
-  while(page<=5){
-    // Busca os trabalhos filtrando pelo ORCID do autor
-    const u=`${API}/works?filter=authorships.author.orcid:${orcid},from_publication_date:${ano}-01-01`+
-      `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
-    const r=await getJSON(u);
-    if(!r||!r.results)break;
-    all=all.concat(r.results);
-    if(r.results.length<100)break;page++;
+// 2. BUSCA OS DETALHES DOS ARTIGOS NO OPENALEX USANDO OS DOIS DO ORCID
+async function findWorks(dois){
+  let all=[];
+  if(!dois || !dois.length) return [];
+  
+  // O OpenAlex permite buscar vários DOIs de uma vez, separados por "|" (fazemos em blocos de 20 para não estourar a URL)
+  for(let i=0; i<dois.length; i+=20) {
+    const chunk = dois.slice(i, i+20).join("|");
+    const u = `${API}/works?filter=doi:${chunk}&select=id,doi,title,publication_year,type,primary_location&per-page=100${mail}`;
+    const r = await getJSON(u);
+    if(r && r.results) {
+      all = all.concat(r.results);
+    }
   }
+  
   return all.map(w=>({id:w.id,doi:w.doi||"",titulo:w.title||"(sem título)",ano:w.publication_year,
     tipo:w.type,fonte:"OpenAlex",
     veiculo:(w.primary_location&&w.primary_location.source&&w.primary_location.source.display_name)||"—"}));
 }
+
 const tipoPT=t=>({article:"Periódico","proceedings-article":"Congresso",book:"Livro","book-chapter":"Capítulo",preprint:"Preprint",dissertation:"Tese/Dissertação"}[t]||t||"Outro");
 const link=w=>w.doi?`<a href="${esc(/^http/.test(w.doi)?w.doi:"https://doi.org/"+w.doi)}" target="_blank" rel="noopener">${esc(w.titulo)}</a>`:esc(w.titulo);
 
@@ -143,7 +168,6 @@ function renderPerson(p,a,ws,nManual){
   const porTipo={};ws.forEach(w=>{const k=tipoPT(w.tipo);porTipo[k]=(porTipo[k]||0)+1});
   const resumo=Object.entries(porTipo).map(([k,v])=>`${k}: ${v}`).join(" · ")||"sem registros";
   
-  // O aviso só aparece se a pessoa não tiver ORCID preenchido na planilha
   let aviso = "";
   if (!p.orcid) {
     aviso = `<p class="warn">ORCID não preenchido na planilha. A busca automática no OpenAlex foi ignorada.</p>`;
@@ -183,8 +207,8 @@ $("go").onclick=async()=>{
       let a=null,auto=[];
       try{
         a=await findAuthor(p);
-        if(a){
-          auto=await findWorks(a.id,p.ano);
+        if(a && a.dois.length > 0){
+          auto=await findWorks(a.dois);
         }
       }catch(e){console.error(e)}
       
