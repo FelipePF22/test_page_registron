@@ -74,7 +74,7 @@ async function loadPeople(){
   if(!res.ok)throw new Error("Erro HTTP "+res.status+" ao ler a planilha.");
   const txt=await res.text();
   const t=parseCSV(txt);
-  const h=(t[0]||[]).map(norm);
+  const h=(t[4]||[]).map(norm);
   const col=k=>h.findIndex(x=>x.includes(k));
   const iN=col("nome"),iL=col("nivel"),iA=col("ano"),iO=col("orcid"),iG=col("academico");
   if(iN<0||iA<0)throw new Error("Link não devolveu CSV: "+txt.slice(0,80).replace(/</g,"&lt;"));
