@@ -76,7 +76,7 @@ async function loadPeople(){
   const t=parseCSV(txt);
   const h=(t[0]||[]).map(norm);
   const col=k=>h.findIndex(x=>x.includes(k));
-  const iN=col("nome"),iL=col("nivel"),iA=col("ano"),iO=col("orcid"),iG=col("academico");
+  const iN=col("nome como"),iL=col("nivel"),iA=col("ingresso"),iO=col("orcid"),iG=col("academico");
   if(iN<0||iA<0)throw new Error("Link não devolveu CSV: "+txt.slice(0,80).replace(/</g,"&lt;"));
   const ppl=t.slice(1).filter(r=>r[iN]&&r[iN].trim()).map(r=>({
     nome:r[iN].trim(),nivel:(r[iL]||"").trim(),
