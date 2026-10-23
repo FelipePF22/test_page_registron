@@ -36,7 +36,7 @@ a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
 <script>
 // ===== CONFIGURAÇÃO (edite apenas aqui) =====
 const CONFIG = {
-  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas", // ID da planilha (compartilhada como "Qualquer pessoa com o link")
+  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas", // ID da planilha
   ABA_PESSOAS_GID: "0",          // gid da aba com os nomes (Página1)
   ABA_PUBLICACOES: "Publicações", // nome da aba de registro manual (opcional)
   EMAIL: "felipefurlaneto01@gmail.com" // opcional, melhora a fila de requisições do OpenAlex
@@ -74,25 +74,41 @@ async function loadPeople(){
   const txt=await res.text();
   const t=parseCSV(txt);
   
-  // Lê o cabeçalho na linha 5 (índice 4)
-  const h=(t[4]||[]).map(norm);
-  const col=k=>h.findIndex(x=>x.includes(k));
+  // LEITURA INTELIGENTE: Encontra em qual linha está o cabeçalho real
+  let headerRowIndex = -1;
+  for(let i=0; i<t.length; i++){
+    const linha = (t[i] || []).map(norm);
+    // Se a linha contiver "nivel" E "ingresso", é a linha do cabeçalho
+    if(linha.some(c => c.includes("nivel")) && linha.some(c => c.includes("ingresso"))){
+      headerRowIndex = i;
+      break;
+    }
+  }
   
-  // Busca as colunas exatas da sua planilha
-  const iN=col("nome como publicado"),iL=col("nivel"),iA=col("ano de ingresso"),iO=col("orcid"),iG=col("academico");
+  if(headerRowIndex === -1){
+    throw new Error("Cabeçalho não encontrado. Certifique-se de que a planilha tem as colunas 'Nível Acadêmico' e 'Ano de Ingresso'.");
+  }
+
+  const h = t[headerRowIndex].map(norm);
+  const col = k => h.findIndex(x => x.includes(k));
   
-  if(iN<0||iA<0)throw new Error("Link não devolveu CSV ou cabeçalho não encontrado. Verifique os nomes das colunas.");
+  // Agora ele acha "nome" mesmo que a célula esteja mesclada
+  const iN=col("nome"), iL=col("nivel"), iA=col("ingresso"), iO=col("orcid"), iG=col("academico");
   
-  // Lê os dados a partir da linha 6 (índice 5)
-  const ppl=t.slice(5).filter(r=>r[iN]&&r[iN].trim()).map(r=>({
-    nome:r[iN].trim(),
-    nivel:(r[iL]||"").trim(),
-    ano:parseInt(r[iA])||1900,
-    orcid:iO>=0?(r[iO]||"").trim():"",
-    scholar:iG>=0?(r[iG]||"").trim():""
+  if(iN<0 || iA<0) {
+    throw new Error("Colunas essenciais não encontradas. Verifique se existem 'Nome' e 'Ano de Ingresso'.");
+  }
+  
+  // Pega os dados a partir da linha seguinte ao cabeçalho encontrado
+  const ppl = t.slice(headerRowIndex + 1).filter(r => r[iN] && r[iN].trim()).map(r => ({
+    nome: r[iN].trim(),
+    nivel: (r[iL] || "").trim(),
+    ano: parseInt(r[iA]) || 1900,
+    orcid: iO >= 0 ? (r[iO] || "").trim() : "",
+    scholar: iG >= 0 ? (r[iG] || "").trim() : ""
   }));
   
-  if(!ppl.length)throw new Error("Planilha lida, mas sem linhas de pessoas.");
+  if(!ppl.length) throw new Error("Nenhum nome encontrado abaixo do cabeçalho.");
   return ppl;
 }
 
@@ -115,7 +131,7 @@ async function loadManual(){
     const h=(t[0]||[]).map(norm);
     const col=(...ks)=>h.findIndex(x=>ks.some(k=>x.includes(k)));
     const iP=col("pessoa","nome"),iT=col("titulo"),iA=col("ano"),iTp=col("tipo"),iV=col("veiculo","revista","congresso"),iL=col("link","doi");
-    if(iP<0||iT<0)return[]; // aba inexistente ou com outro formato
+    if(iP<0||iT<0)return[]; 
     return t.slice(1).filter(r=>r[iP]&&r[iT]&&r[iT].trim()).map(r=>({
       pessoa:norm(r[iP]),titulo:r[iT].trim(),ano:parseInt(r[iA])||0,
       tipo:tipoManual(iTp>=0?r[iTp]:""),veiculo:(iV>=0&&r[iV]||"").trim()||"—",
@@ -136,9 +152,12 @@ async function findAuthor(p){
 
 async function findWorks(aid,ano){
   let page=1,all=[];
+  const anoAtual = new Date().getFullYear();
+  // Se o ano de ingresso for no futuro (ex: 2025), não filtra por data para não zerar a busca
+  const filtroData = ano <= anoAtual ? `,from_publication_date:${ano}-01-01` : "";
+
   while(page<=5){
-    // CORREÇÃO: Agora usa o ID do autor (aid) em vez do nome, evitando homônimos e erros.
-    const u = `${API}/works?filter=author.id:${aid},from_publication_date:${ano}-01-01` +
+    const u = `${API}/works?filter=author.id:${aid}${filtroData}` +
   `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
     const r=await getJSON(u);
     if(!r||!r.results)break;
@@ -160,7 +179,7 @@ function renderPerson(p,a,ws,nManual){
     a.exato?"":`<p class="warn">Correspondência por nome (“${esc(a.nome)}”). Para evitar homônimos, preencha o ORCID na planilha.</p>`;
   const sch=/^https?:/.test(p.scholar)?` · <a href="${esc(p.scholar)}" target="_blank" rel="noopener">Google Acadêmico</a>`:"";
   return `<div class="card"><h3>${esc(p.nome)}</h3>
-  <div class="mut">${esc(p.nivel)} · ingresso em ${p.ano} · <b>${ws.length}</b> publicações desde o ingresso (${resumo})${sch}</div>${aviso}
+  <div class="mut">${esc(p.nivel)} · ingresso em ${p.ano} · <b>${ws.length}</b> publicações (${resumo})${sch}</div>${aviso}
   <div class="wrap"><table><tr><th>Ano</th><th>Título</th><th>Tipo</th><th>Revista / Congresso</th><th>Fonte</th></tr>
   ${ws.sort((x,y)=>y.ano-x.ano).map(w=>`<tr><td>${w.ano||"—"}</td><td>${link(w)}</td><td>${tipoPT(w.tipo)}</td><td>${esc(w.veiculo)}</td><td>${w.fonte}</td></tr>`).join("")}
   </table></div></div>`;
@@ -192,7 +211,6 @@ $("go").onclick=async()=>{
       const p=people[i];$("st").textContent=` Buscando ${i+1}/${people.length}: ${p.nome}`;
       let a=null,auto=[];
       try{a=await findAuthor(p);if(a)auto=await findWorks(a.id,p.ano)}catch(e){console.error(e)}
-      // junta automático + manual, sem duplicar (DOI ou título)
       const seen=new Set(),ws=[];
       const man=manual.filter(m=>m.pessoa===norm(p.nome)&&(!m.ano||m.ano>=p.ano));
       [...auto,...man].forEach(w=>{const k=keyOf(w);if(seen.has(k))return;seen.add(k);ws.push(w)});
