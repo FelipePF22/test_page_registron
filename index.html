@@ -34,12 +34,12 @@ a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
 <div id="geral" class="mut">Clique em “Atualizar levantamento”.</div>
 
 <script>
-// ===== CONFIGURAÇÃO (edite apenas aqui) =====
+// ===== CONFIGURAÇÃO =====
 const CONFIG = {
-  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas", // ID da planilha
-  ABA_PESSOAS_GID: "0",          // gid da aba com os nomes (Página1)
-  ABA_PUBLICACOES: "Publicações", // nome da aba de registro manual (opcional)
-  EMAIL: "felipefurlaneto01@gmail.com" // opcional, melhora a fila de requisições do OpenAlex
+  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas", 
+  ABA_PESSOAS_GID: "0",          
+  ABA_PUBLICACOES: "Publicações", 
+  EMAIL: "felipefurlaneto01@gmail.com" 
 };
 // ============================================
 const $=id=>document.getElementById(id);
@@ -74,38 +74,35 @@ async function loadPeople(){
   const txt=await res.text();
   const t=parseCSV(txt);
   
-  // LEITURA INTELIGENTE: Encontra em qual linha está o cabeçalho real
+  // 1. Acha a linha do cabeçalho (procura onde tem "nivel")
   let headerRowIndex = -1;
   for(let i=0; i<t.length; i++){
     const linha = (t[i] || []).map(norm);
-    // Se a linha contiver "nivel" E "ingresso", é a linha do cabeçalho
-    if(linha.some(c => c.includes("nivel")) && linha.some(c => c.includes("ingresso"))){
+    if(linha.some(c => c.includes("nivel"))){
       headerRowIndex = i;
       break;
     }
   }
   
-  if(headerRowIndex === -1){
-    throw new Error("Cabeçalho não encontrado. Certifique-se de que a planilha tem as colunas 'Nível Acadêmico' e 'Ano de Ingresso'.");
-  }
+  if(headerRowIndex === -1) throw new Error("Cabeçalho não encontrado. Verifique a planilha.");
 
   const h = t[headerRowIndex].map(norm);
-  const col = k => h.findIndex(x => x.includes(k));
-  
-  // Agora ele acha "nome" mesmo que a célula esteja mesclada
-  const iN=col("nome"), iL=col("nivel"), iA=col("ingresso"), iO=col("orcid"), iG=col("academico");
-  
-  if(iN<0 || iA<0) {
-    throw new Error("Colunas essenciais não encontradas. Verifique se existem 'Nome' e 'Ano de Ingresso'.");
+  // Acha as colunas. O "nome" pode estar na mesma célula que "Banco de dados..."
+  const iN = h.findIndex(x => x.includes("nome"));
+  const iL = h.findIndex(x => x.includes("nivel"));
+  const iA = h.findIndex(x => x.includes("ingresso") || x.includes("ano"));
+  const iO = h.findIndex(x => x.includes("orcid"));
+
+  if(iN < 0 || iL < 0 || iA < 0) {
+    throw new Error("Colunas não encontradas na planilha. Verifique se as colunas 'Nome', 'Nível Acadêmico' e 'Ano de Ingresso' existem.");
   }
   
-  // Pega os dados a partir da linha seguinte ao cabeçalho encontrado
-  const ppl = t.slice(headerRowIndex + 1).filter(r => r[iN] && r[iN].trim()).map(r => ({
+  // Pega os dados a partir da linha de baixo
+  const ppl = t.slice(headerRowIndex + 1).filter(r => r[iN] && r[iN].trim() && r[iN].trim() !== '""').map(r => ({
     nome: r[iN].trim(),
     nivel: (r[iL] || "").trim(),
     ano: parseInt(r[iA]) || 1900,
-    orcid: iO >= 0 ? (r[iO] || "").trim() : "",
-    scholar: iG >= 0 ? (r[iG] || "").trim() : ""
+    orcid: iO >= 0 ? (r[iO] || "").trim() : ""
   }));
   
   if(!ppl.length) throw new Error("Nenhum nome encontrado abaixo do cabeçalho.");
