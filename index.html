@@ -34,20 +34,18 @@ a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
 <div id="geral" class="mut">Clique em “Atualizar levantamento”.</div>
 
 <script>
-// ===== CONFIGURAÇÃO (edite apenas aqui) =====
+// ===== CONFIGURAÇÃO =====
 const CONFIG = {
-  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas", // ID da planilha
-  ABA_PESSOAS_GID: "0",          // gid da aba com os nomes (Página1)
-  ABA_PUBLICACOES: "Publicações", // nome da aba de registro manual (opcional)
-  EMAIL: "felipefurlaneto01@gmail.com" // seu email
+  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas",
+  ABA_PESSOAS_GID: "0",
+  ABA_PUBLICACOES: "Publicações",
+  EMAIL: "felipefurlaneto01@gmail.com"
 };
 
-// ===== AJUSTES DE LEITURA DA PLANILHA =====
-// A planilha tem logo e título, então os dados começam na linha 5 (índice 4)
+// A planilha começa na linha 5 (índice 4) e o nome na coluna D (índice 3)
 const LINHA_CABECALHO = 4; 
-// O nome começa na coluna D (índice 3, pois A=0, B=1, C=2, D=3)
 const COLUNA_INICIAL = 3;
-// ============================================
+// =========================
 
 const $=id=>document.getElementById(id);
 const API="https://api.openalex.org";
@@ -74,36 +72,33 @@ function parseCSV(t){
 async function getJSON(u){
   try{const r=await fetch(u);if(!r.ok)return null;return await r.json()}catch(e){return null}
 }
+
 async function loadPeople(){
   const res=await fetch(`${GV}&gid=${CONFIG.ABA_PESSOAS_GID}`);
   if(!res.ok)throw new Error("Erro HTTP "+res.status+" ao ler a planilha.");
   const txt=await res.text();
   const t=parseCSV(txt);
   
-  if(t.length <= LINHA_CABECALHO) throw new Error("A planilha está vazia ou o cabeçalho não está na linha 5.");
+  if(t.length <= LINHA_CABECALHO) throw new Error("A planilha está vazia.");
 
-  // Pega a linha do cabeçalho
   const headerRow = t[LINHA_CABECALHO] || [];
-  // Mapeia o cabeçalho ignorando as colunas do logo (inicia na COLUNA_INICIAL)
   const h = headerRow.slice(COLUNA_INICIAL).map(norm); 
   const col = k => h.findIndex(x => x.includes(k));
 
-  const iN = col("nome"); // Vai achar "nome como publicado"
-  const iL = col("nivel"); // Vai achar "nivel academico"
-  const iA = col("ano");   // Vai achar "ano de ingresso"
+  const iN = col("nome");
+  const iL = col("nivel");
+  const iA = col("ano");
   const iO = col("orcid");
   const iG = col("academico");
 
   if(iN < 0 || iA < 0) {
-    throw new Error("Não encontrei as colunas 'Nome' e 'Ano' na linha 5. Verifique os títulos.");
+    throw new Error("Não encontrei as colunas 'Nome' e 'Ano' na linha 5.");
   }
 
-  // Pega os dados a partir da linha 6 (índice 5)
   const ppl = t.slice(LINHA_CABECALHO + 1).filter(r => {
     const nomeNaLinha = r[iN + COLUNA_INICIAL];
     return nomeNaLinha && nomeNaLinha.trim();
   }).map(r => {
-    // Função auxiliar para pegar o valor na coluna certa (pulando o logo)
     const getVal = (idx) => idx >= 0 ? (r[idx + COLUNA_INICIAL] || "").trim() : "";
     return {
       nome: getVal(iN),
@@ -114,7 +109,7 @@ async function loadPeople(){
     };
   });
 
-  if(!ppl.length)throw new Error("Planilha lida, mas sem linhas de pessoas preenchidas.");
+  if(!ppl.length)throw new Error("Planilha lida, mas sem pessoas preenchidas.");
   return ppl;
 }
 
@@ -134,7 +129,7 @@ async function loadManual(){
     const res=await fetch(`${GV}&sheet=${encodeURIComponent(CONFIG.ABA_PUBLICACOES)}`);
     if(!res.ok)return[];
     const t=parseCSV(await res.text());
-    const h=(t[0]||[]).map(norm); // A aba manual provavelmente começa na linha 1
+    const h=(t[0]||[]).map(norm);
     const col=(...ks)=>h.findIndex(x=>ks.some(k=>x.includes(k)));
     const iP=col("pessoa","nome"),iT=col("titulo"),iA=col("ano"),iTp=col("tipo"),iV=col("veiculo","revista","congresso"),iL=col("link","doi");
     if(iP<0||iT<0)return[];
@@ -145,12 +140,12 @@ async function loadManual(){
   }catch(e){return[]}
 }
 
-// --- CORREÇÃO DO ERRO DO NOME ABREVIADO AQUI ---
+// --- AQUI ESTAVA O ERRO DO OPENALEX (FALTA DE ASPAS) ---
 async function findWorks(nomeAutor, ano){
   let page=1,all=[];
   while(page<=5){
-    // Removemos o ID e passamos a buscar por "raw_author_name.search"
-    const u = `${API}/works?filter=raw_author_name.search:${encodeURIComponent(nomeAutor)},from_publication_date:${ano}-01-01` +
+    // Adicionado %22 que é o código para aspas (") ao redor do nome
+    const u = `${API}/works?filter=raw_author_name.search:%22${encodeURIComponent(nomeAutor)}%22,from_publication_date:${ano}-01-01` +
       `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
     const r=await getJSON(u);
     if(!r||!r.results)break;
@@ -170,6 +165,7 @@ function renderPerson(p,ws,nManual){
   const resumo=Object.entries(porTipo).map(([k,v])=>`${k}: ${v}`).join(" · ")||"sem registros";
   const sch=/^https?:/.test(p.scholar)?` · <a href="${esc(p.scholar)}" target="_blank" rel="noopener">Google Acadêmico</a>`:"";
   
+  // Aviso laranja de homônimo foi REMOVIDO daqui
   return `<div class="card"><h3>${esc(p.nome)}</h3>
   <div class="mut">${esc(p.nivel)} · ingresso em ${p.ano} · <b>${ws.length}</b> publicações desde o ingresso (${resumo})${sch}</div>
   <div class="wrap"><table><tr><th>Ano</th><th>Título</th><th>Tipo</th><th>Revista / Congresso</th><th>Fonte</th></tr>
@@ -206,9 +202,8 @@ $("go").onclick=async()=>{
       let auto=[];
       
       try {
-        // Agora busca direto pelo nome como publicado!
         auto = await findWorks(p.nome, p.ano);
-      } catch(e) { console.error("Erro na busca:", e) }
+      } catch(e) { console.error(e) }
       
       const seen=new Set(),ws=[];
       const man=manual.filter(m=>m.pessoa===norm(p.nome)&&(!m.ano||m.ano>=p.ano));
