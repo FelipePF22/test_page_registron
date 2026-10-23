@@ -123,8 +123,8 @@ async function findAuthor(p){
 async function findWorks(aid,ano){
   let page=1,all=[];
   while(page<=5){
-    const u=`${API}/works?filter=authorships.author.id:${aid},from_publication_date:${ano}-01-01`+
-      `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
+    const u = `${API}/works?filter=raw_author_name.search:${encodeURIComponent(p.nome)},from_publication_date:${ano}-01-01` +
+  `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
     const r=await getJSON(u);
     if(!r||!r.results)break;
     all=all.concat(r.results);
