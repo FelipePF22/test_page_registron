@@ -36,7 +36,7 @@ a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
 <script>
 // ===== CONFIGURAÇÃO (edite apenas aqui) =====
 const CONFIG = {
-  // Google Sheets > Arquivo > Compartilhar > Publicar na Web > CSV
+  // Link CSV da planilha (Google Sheets, compartilhada como "Qualquer pessoa com o link")
   CSV_URL: "https://docs.google.com/spreadsheets/d/1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas/gviz/tq?tqx=out:csv&gid=0",
   EMAIL: "felipefurlaneto01@gmail.com" // opcional, melhora a fila de requisições do OpenAlex
 };
@@ -62,19 +62,23 @@ function parseCSV(t){
 }
 async function loadPeople(){
   const res=await fetch(CONFIG.CSV_URL);
-  if(!res.ok)throw new Error("Não foi possível ler a planilha (verifique se está publicada na web).");
-  const t=parseCSV(await res.text());
-  const h=t[0].map(norm);
+  if(!res.ok)throw new Error("Erro HTTP "+res.status+" ao ler a planilha.");
+  const txt=await res.text();
+  const t=parseCSV(txt);
+  const h=(t[0]||[]).map(norm);
   const col=k=>h.findIndex(x=>x.includes(k));
   const iN=col("nome"),iL=col("nivel"),iA=col("ano"),iO=col("orcid");
-  return t.slice(1).filter(r=>r[iN]&&r[iN].trim()).map(r=>({
+  if(iN<0||iA<0)throw new Error("Link não devolveu CSV: "+txt.slice(0,80).replace(/</g,"&lt;"));
+  const ppl=t.slice(1).filter(r=>r[iN]&&r[iN].trim()).map(r=>({
     nome:r[iN].trim(),nivel:(r[iL]||"").trim(),
     ano:parseInt(r[iA])||1900,orcid:iO>=0?(r[iO]||"").trim():""}));
+  if(!ppl.length)throw new Error("Planilha lida, mas sem linhas de pessoas.");
+  return ppl;
 }
 async function findAuthor(p){
   if(p.orcid){
     const id=p.orcid.replace(/^https?:\/\/orcid.org\//,"");
-    const r=await (await fetch(`${API}/authors/orcid:${id}?select=id,display_name${mail.replace("&","?")}`)).json();
+    const r=await (await fetch(`${API}/authors/orcid:${id}?select=id,display_name${mail}`)).json();
     if(r.id)return{id:r.id.split("/").pop(),nome:r.display_name,exato:true};
   }
   const r=await (await fetch(`${API}/authors?search=${encodeURIComponent(p.nome)}&per-page=1${mail}`)).json();
@@ -124,6 +128,7 @@ function renderGeral(map){
 }
 $("go").onclick=async()=>{
   $("go").disabled=true;$("ind").innerHTML="";rows=[];
+  let erroBusca="";
   try{
     $("st").textContent=" Lendo planilha…";
     const people=await loadPeople();
@@ -131,7 +136,8 @@ $("go").onclick=async()=>{
     for(let i=0;i<people.length;i++){
       const p=people[i];$("st").textContent=` Buscando ${i+1}/${people.length}: ${p.nome}`;
       let a=null,ws=[];
-      try{a=await findAuthor(p);if(a)ws=await findWorks(a.id,p.ano)}catch(e){}
+      try{a=await findAuthor(p);if(a)ws=await findWorks(a.id,p.ano)}
+      catch(e){console.error(e);erroBusca=" (erro OpenAlex: "+e.message+")"}
       $("ind").insertAdjacentHTML("beforeend",renderPerson(p,a,ws));
       ws.forEach(w=>{
         if(!geral.has(w.id))geral.set(w.id,{...w,autores:[]});
@@ -140,9 +146,9 @@ $("go").onclick=async()=>{
       });
     }
     renderGeral(geral);
-    $("st").textContent=" Concluído em "+new Date().toLocaleString("pt-BR");
+    $("st").textContent=" Concluído em "+new Date().toLocaleString("pt-BR")+erroBusca;
     $("csv").disabled=false;
-  }catch(e){$("st").textContent=" Erro: "+e.message}
+  }catch(e){console.error(e);$("st").textContent=" Erro: "+e.message}
   $("go").disabled=false;
 };
 $("csv").onclick=()=>{
