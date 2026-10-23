@@ -162,13 +162,7 @@ function renderPerson(p,a,ws,nManual){
   let aviso = "";
   if (!a) {
     aviso = `<p class="warn">Autor não encontrado no OpenAlex (use a aba “Publicações” para registrar manualmente).</p>`;
-  } else if (!a.exato) {
-    if (a.orcidFornecido) {
-       aviso = `<p class="warn">O ORCID foi lido da planilha, mas a base do OpenAlex ainda não possui esse identificador vinculado a um autor. A busca foi feita pelo nome (“${esc(a.nome)}”).</p>`;
-    } else {
-       aviso = `<p class="warn">Correspondência por nome (“${esc(a.nome)}”). Para evitar homônimos, preencha o ORCID na planilha.</p>`;
-    }
-  }
+  } 
 
   const sch=/^https?:/.test(p.scholar)?` · <a href="${esc(p.scholar)}" target="_blank" rel="noopener">Google Acadêmico</a>`:"";
   
