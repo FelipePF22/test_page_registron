@@ -77,7 +77,7 @@ async function loadPeople(){
   const h=(t[0]||[]).map(norm);
   const col=k=>h.findIndex(x=>x.includes(k));
   
-  // CORREÇÃO DOS CABEÇALHOS
+  // Correção dos cabeçalhos da sua planilha
   const iN=col("nome como"), iL=col("nivel"), iA=col("ingresso"), iO=col("orcid"), iG=col("academico");
   
   if(iN<0||iA<0)throw new Error("Link não devolveu CSV: "+txt.slice(0,80).replace(/</g,"&lt;"));
@@ -114,33 +114,18 @@ async function loadManual(){
   }catch(e){return[]}
 }
 
-// CORREÇÃO DO ORCID
+// BUSCA EXCLUSIVA PELO ORCID
 async function findAuthor(p){
-  let idOrcid = "";
-  if(p.orcid){
-    idOrcid = p.orcid.trim().replace(/^https?:\/\/orcid.org\//,"").replace(/\s/g, "");
-    const r = await getJSON(`${API}/authors/orcid:${idOrcid}?select=id,display_name${mail}`);
-    if(r && r.id) return { id: r.id.split("/").pop(), nome: r.display_name, exato: true };
-  }
-  
-  const r = await getJSON(`${API}/authors?search=${encodeURIComponent(p.nome)}&per-page=1${mail}`);
-  const a = r && r.results && r.results[0];
-  
-  if(a) {
-    return { 
-      id: a.id.split("/").pop(), 
-      nome: a.display_name, 
-      exato: false,
-      orcidFornecido: !!idOrcid
-    };
-  }
-  return null;
+  if(!p.orcid) return null;
+  const idOrcid = p.orcid.trim().replace(/^https?:\/\/orcid.org\//,"").replace(/\s/g, "");
+  return { id: idOrcid, nome: p.nome, exato: true };
 }
 
-async function findWorks(aid,ano){
+async function findWorks(orcid,ano){
   let page=1,all=[];
   while(page<=5){
-    const u=`${API}/works?filter=authorships.author.id:${aid},from_publication_date:${ano}-01-01`+
+    // Busca os trabalhos filtrando pelo ORCID do autor
+    const u=`${API}/works?filter=authorships.author.orcid:${orcid},from_publication_date:${ano}-01-01`+
       `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
     const r=await getJSON(u);
     if(!r||!r.results)break;
@@ -154,14 +139,14 @@ async function findWorks(aid,ano){
 const tipoPT=t=>({article:"Periódico","proceedings-article":"Congresso",book:"Livro","book-chapter":"Capítulo",preprint:"Preprint",dissertation:"Tese/Dissertação"}[t]||t||"Outro");
 const link=w=>w.doi?`<a href="${esc(/^http/.test(w.doi)?w.doi:"https://doi.org/"+w.doi)}" target="_blank" rel="noopener">${esc(w.titulo)}</a>`:esc(w.titulo);
 
-// CORREÇÃO DO AVISO NA TELA
 function renderPerson(p,a,ws,nManual){
   const porTipo={};ws.forEach(w=>{const k=tipoPT(w.tipo);porTipo[k]=(porTipo[k]||0)+1});
   const resumo=Object.entries(porTipo).map(([k,v])=>`${k}: ${v}`).join(" · ")||"sem registros";
   
+  // O aviso só aparece se a pessoa não tiver ORCID preenchido na planilha
   let aviso = "";
-  if (!a) {
-    aviso = `<p class="warn">Autor não encontrado no OpenAlex (use a aba “Publicações” para registrar manualmente).</p>`;
+  if (!p.orcid) {
+    aviso = `<p class="warn">ORCID não preenchido na planilha. A busca automática no OpenAlex foi ignorada.</p>`;
   }
 
   const sch=/^https?:/.test(p.scholar)?` · <a href="${esc(p.scholar)}" target="_blank" rel="noopener">Google Acadêmico</a>`:"";
@@ -196,12 +181,20 @@ $("go").onclick=async()=>{
     for(let i=0;i<people.length;i++){
       const p=people[i];$("st").textContent=` Buscando ${i+1}/${people.length}: ${p.nome}`;
       let a=null,auto=[];
-      try{a=await findAuthor(p);if(a)auto=await findWorks(a.id,p.ano)}catch(e){console.error(e)}
+      try{
+        a=await findAuthor(p);
+        if(a){
+          auto=await findWorks(a.id,p.ano);
+        }
+      }catch(e){console.error(e)}
+      
       // junta automático + manual, sem duplicar (DOI ou título)
       const seen=new Set(),ws=[];
       const man=manual.filter(m=>m.pessoa===norm(p.nome)&&(!m.ano||m.ano>=p.ano));
       [...auto,...man].forEach(w=>{const k=keyOf(w);if(seen.has(k))return;seen.add(k);ws.push(w)});
+      
       $("ind").insertAdjacentHTML("beforeend",renderPerson(p,a,ws,man.length));
+      
       ws.forEach(w=>{
         const k=keyOf(w);
         if(!geral.has(k))geral.set(k,{...w,autores:[]});
