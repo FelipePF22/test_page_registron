@@ -162,7 +162,7 @@ function renderPerson(p,a,ws,nManual){
   let aviso = "";
   if (!a) {
     aviso = `<p class="warn">Autor não encontrado no OpenAlex (use a aba “Publicações” para registrar manualmente).</p>`;
-  } 
+  }
 
   const sch=/^https?:/.test(p.scholar)?` · <a href="${esc(p.scholar)}" target="_blank" rel="noopener">Google Acadêmico</a>`:"";
   
