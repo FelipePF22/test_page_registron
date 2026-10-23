@@ -41,7 +41,7 @@ const CONFIG = {
   ABA_PUBLICACOES: "Publicações", // nome da aba de registro manual (opcional)
   EMAIL: "felipefurlaneto01@gmail.com" // opcional, melhora a fila de requisições do OpenAlex
 };
-// Aba 1 (pessoas): Nome completo | Nível | Ano de ingresso | ORCID (opcional) | Google Acadêmico (opcional)
+// Aba 1 (pessoas): Nome Como Publicado | Nível Academico | Ano de Ingresso | ORCID (se aplicavel) | Google Acadêmico (opcional)
 // Aba "Publicações" (manual): Pessoa | Título | Ano | Tipo | Veículo | Link ou DOI
 // ============================================
 const $=id=>document.getElementById(id);
@@ -76,7 +76,10 @@ async function loadPeople(){
   const t=parseCSV(txt);
   const h=(t[0]||[]).map(norm);
   const col=k=>h.findIndex(x=>x.includes(k));
-  const iN=col("nome como"),iL=col("nivel"),iA=col("ingresso"),iO=col("orcid"),iG=col("academico");
+  
+  // AQUI ESTÁ A CORREÇÃO DOS CABEÇALHOS DA SUA PLANILHA
+  const iN=col("nome como"), iL=col("nivel"), iA=col("ingresso"), iO=col("orcid"), iG=col("academico");
+  
   if(iN<0||iA<0)throw new Error("Link não devolveu CSV: "+txt.slice(0,80).replace(/</g,"&lt;"));
   const ppl=t.slice(1).filter(r=>r[iN]&&r[iN].trim()).map(r=>({
     nome:r[iN].trim(),nivel:(r[iL]||"").trim(),
@@ -110,16 +113,31 @@ async function loadManual(){
       doi:(iL>=0&&r[iL]||"").trim(),fonte:"Manual"}));
   }catch(e){return[]}
 }
+
 async function findAuthor(p){
+  let idOrcid = "";
   if(p.orcid){
-    const id=p.orcid.replace(/^https?:\/\/orcid.org\//,"");
-    const r=await getJSON(`${API}/authors/orcid:${id}?select=id,display_name${mail}`);
-    if(r&&r.id)return{id:r.id.split("/").pop(),nome:r.display_name,exato:true};
+    idOrcid = p.orcid.trim().replace(/^https?:\/\/orcid.org\//,"").replace(/\s/g, "");
+    const r = await getJSON(`${API}/authors/orcid:${idOrcid}?select=id,display_name${mail}`);
+    if(r && r.id) return { id: r.id.split("/").pop(), nome: r.display_name, exato: true };
   }
-  const r=await getJSON(`${API}/authors?search=${encodeURIComponent(p.nome)}&per-page=1${mail}`);
-  const a=r&&r.results&&r.results[0];
-  return a?{id:a.id.split("/").pop(),nome:a.display_name,exato:false}:null;
+  
+  // Se chegou aqui, ou não tem ORCID, ou o OpenAlex não conhece esse ORCID.
+  // Vamos buscar pelo nome, mas avisar o sistema se tínhamos um ORCID.
+  const r = await getJSON(`${API}/authors?search=${encodeURIComponent(p.nome)}&per-page=1${mail}`);
+  const a = r && r.results && r.results[0];
+  
+  if(a) {
+    return { 
+      id: a.id.split("/").pop(), 
+      nome: a.display_name, 
+      exato: false,
+      orcidFornecido: !!idOrcid // Avisa o sistema que o ORCID foi preenchido
+    };
+  }
+  return null;
 }
+
 async function findWorks(aid,ano){
   let page=1,all=[];
   while(page<=5){
@@ -140,9 +158,20 @@ const link=w=>w.doi?`<a href="${esc(/^http/.test(w.doi)?w.doi:"https://doi.org/"
 function renderPerson(p,a,ws,nManual){
   const porTipo={};ws.forEach(w=>{const k=tipoPT(w.tipo);porTipo[k]=(porTipo[k]||0)+1});
   const resumo=Object.entries(porTipo).map(([k,v])=>`${k}: ${v}`).join(" · ")||"sem registros";
-  const aviso=!a?`<p class="warn">Autor não encontrado no OpenAlex (use a aba “Publicações” para registrar manualmente).</p>`:
-    a.exato?"":`<p class="warn">Correspondência por nome (“${esc(a.nome)}”). Para evitar homônimos, preencha o ORCID na planilha.</p>`;
+  
+  let aviso = "";
+  if (!a) {
+    aviso = `<p class="warn">Autor não encontrado no OpenAlex (use a aba “Publicações” para registrar manualmente).</p>`;
+  } else if (!a.exato) {
+    if (a.orcidFornecido) {
+       aviso = `<p class="warn">O ORCID foi lido da planilha, mas a base do OpenAlex ainda não possui esse identificador vinculado a um autor. A busca foi feita pelo nome (“${esc(a.nome)}”).</p>`;
+    } else {
+       aviso = `<p class="warn">Correspondência por nome (“${esc(a.nome)}”). Para evitar homônimos, preencha o ORCID na planilha.</p>`;
+    }
+  }
+
   const sch=/^https?:/.test(p.scholar)?` · <a href="${esc(p.scholar)}" target="_blank" rel="noopener">Google Acadêmico</a>`:"";
+  
   return `<div class="card"><h3>${esc(p.nome)}</h3>
   <div class="mut">${esc(p.nivel)} · ingresso em ${p.ano} · <b>${ws.length}</b> publicações desde o ingresso (${resumo})${sch}</div>${aviso}
   <div class="wrap"><table><tr><th>Ano</th><th>Título</th><th>Tipo</th><th>Revista / Congresso</th><th>Fonte</th></tr>
