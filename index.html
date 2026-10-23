@@ -20,7 +20,7 @@ button:disabled{opacity:.5}
 table{border-collapse:collapse;width:100%;font-size:14px}
 th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--bd);vertical-align:top}
 .wrap{overflow-x:auto}
-a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
+a{color:var(--ac)}
 </style>
 </head>
 <body>
@@ -92,7 +92,7 @@ async function loadPeople(){
   const iG = col("academico");
 
   if(iN < 0 || iA < 0) {
-    throw new Error("Não encontrei as colunas 'Nome' e 'Ano' na linha 5.");
+    throw new Error("Não encontrei as colunas 'Nome' e 'Ano' na linha 5. Verifique os títulos.");
   }
 
   const ppl = t.slice(LINHA_CABECALHO + 1).filter(r => {
@@ -140,12 +140,15 @@ async function loadManual(){
   }catch(e){return[]}
 }
 
-// --- AQUI ESTAVA O ERRO DO OPENALEX (FALTA DE ASPAS) ---
+// --- AQUI FOI A GRANDE CORREÇÃO DA API ---
 async function findWorks(nomeAutor, ano){
   let page=1,all=[];
+  // Remove caracteres invisíveis que o Google Sheets manda
+  const nomeLimpo = nomeAutor.replace(/[^\x20-\x7E]/g, '').trim(); 
+  
   while(page<=5){
-    // Adicionado %22 que é o código para aspas (") ao redor do nome
-    const u = `${API}/works?filter=raw_author_name.search:%22${encodeURIComponent(nomeAutor)}%22,from_publication_date:${ano}-01-01` +
+    // Mudamos para raw_author_name.search.exact e usamos aspas no nome
+    const u = `${API}/works?filter=raw_author_name.search.exact:%22${encodeURIComponent(nomeLimpo)}%22,from_publication_date:${ano}-01-01` +
       `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
     const r=await getJSON(u);
     if(!r||!r.results)break;
@@ -160,12 +163,12 @@ async function findWorks(nomeAutor, ano){
 const tipoPT=t=>({article:"Periódico","proceedings-article":"Congresso",book:"Livro","book-chapter":"Capítulo",preprint:"Preprint",dissertation:"Tese/Dissertação"}[t]||t||"Outro");
 const link=w=>w.doi?`<a href="${esc(/^http/.test(w.doi)?w.doi:"https://doi.org/"+w.doi)}" target="_blank" rel="noopener">${esc(w.titulo)}</a>`:esc(w.titulo);
 
-function renderPerson(p,ws,nManual){
+function renderPerson(p,ws){
   const porTipo={};ws.forEach(w=>{const k=tipoPT(w.tipo);porTipo[k]=(porTipo[k]||0)+1});
   const resumo=Object.entries(porTipo).map(([k,v])=>`${k}: ${v}`).join(" · ")||"sem registros";
   const sch=/^https?:/.test(p.scholar)?` · <a href="${esc(p.scholar)}" target="_blank" rel="noopener">Google Acadêmico</a>`:"";
   
-  // Aviso laranja de homônimo foi REMOVIDO daqui
+  // O aviso laranja foi 100% removido daqui
   return `<div class="card"><h3>${esc(p.nome)}</h3>
   <div class="mut">${esc(p.nivel)} · ingresso em ${p.ano} · <b>${ws.length}</b> publicações desde o ingresso (${resumo})${sch}</div>
   <div class="wrap"><table><tr><th>Ano</th><th>Título</th><th>Tipo</th><th>Revista / Congresso</th><th>Fonte</th></tr>
@@ -210,7 +213,7 @@ $("go").onclick=async()=>{
       
       [...auto,...man].forEach(w=>{const k=keyOf(w);if(seen.has(k))return;seen.add(k);ws.push(w)});
       
-      $("ind").insertAdjacentHTML("beforeend",renderPerson(p,ws,man.length));
+      $("ind").insertAdjacentHTML("beforeend",renderPerson(p,ws));
       
       ws.forEach(w=>{
         const k=keyOf(w);
