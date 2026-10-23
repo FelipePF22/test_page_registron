@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel de Publicações do Laboratório</title>
+<style>
+:root{--bg:#fff;--fg:#1c1f24;--mut:#667085;--card:#f5f7fa;--bd:#d9dee5;--ac:#1b5fd1}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--fg:#e8ebf0;--mut:#98a2b3;--card:#1d2229;--bd:#323a45;--ac:#6ea3ff}}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:24px;max-width:1000px;margin-inline:auto}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:18px;margin:32px 0 8px}h3{font-size:16px;margin:0}
+.mut{color:var(--mut);font-size:13px}
+button{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:14px;cursor:pointer}
+button:disabled{opacity:.5}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:14px;margin:12px 0}
+.tot{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}
+.tot div{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:10px 16px}
+.tot b{display:block;font-size:22px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--bd);vertical-align:top}
+.wrap{overflow-x:auto}
+a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
+</style>
+</head>
+<body>
+<h1>Painel de Publicações do Laboratório</h1>
+<p class="mut">Fonte dos nomes: planilha do laboratório. Fonte das publicações: OpenAlex (agrega Crossref, ORCID, Scopus-indexados e outros).</p>
+<button id="go">Atualizar levantamento</button> <button id="csv" disabled>Exportar CSV</button>
+<span id="st" class="mut"></span>
+
+<div id="ind"></div>
+<h2>Registro geral do laboratório</h2>
+<div id="geral" class="mut">Clique em “Atualizar levantamento”.</div>
+
+<script>
+// ===== CONFIGURAÇÃO (edite apenas aqui) =====
+const CONFIG = {
+  // Google Sheets > Arquivo > Compartilhar > Publicar na Web > CSV
+  CSV_URL: "https://docs.google.com/spreadsheets/d/1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas/edit?usp=sharing",
+  EMAIL: "felipefurlaneto01@gmail.com" // opcional, melhora a fila de requisições do OpenAlex
+};
+// Colunas esperadas: Nome completo | Nível | Ano de ingresso | ORCID (opcional)
+// ============================================
+const $=id=>document.getElementById(id);
+const API="https://api.openalex.org";
+const mail=CONFIG.EMAIL?`&mailto=${encodeURIComponent(CONFIG.EMAIL)}`:"";
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const norm=s=>s.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();
+let rows=[];
+
+function parseCSV(t){
+  const out=[];let r=[],c="",q=false;
+  for(let i=0;i<t.length;i++){const ch=t[i];
+    if(q){if(ch=='"'){if(t[i+1]=='"'){c+='"';i++}else q=false}else c+=ch}
+    else if(ch=='"')q=true;
+    else if(ch==","){r.push(c);c=""}
+    else if(ch=="\n"){r.push(c);out.push(r);r=[];c=""}
+    else if(ch!="\r")c+=ch}
+  if(c||r.length){r.push(c);out.push(r)}
+  return out;
+}
+async function loadPeople(){
+  const res=await fetch(CONFIG.CSV_URL);
+  if(!res.ok)throw new Error("Não foi possível ler a planilha (verifique se está publicada na web).");
+  const t=parseCSV(await res.text());
+  const h=t[0].map(norm);
+  const col=k=>h.findIndex(x=>x.includes(k));
+  const iN=col("nome"),iL=col("nivel"),iA=col("ano"),iO=col("orcid");
+  return t.slice(1).filter(r=>r[iN]&&r[iN].trim()).map(r=>({
+    nome:r[iN].trim(),nivel:(r[iL]||"").trim(),
+    ano:parseInt(r[iA])||1900,orcid:iO>=0?(r[iO]||"").trim():""}));
+}
+async function findAuthor(p){
+  if(p.orcid){
+    const id=p.orcid.replace(/^https?:\/\/orcid.org\//,"");
+    const r=await (await fetch(`${API}/authors/orcid:${id}?select=id,display_name${mail.replace("&","?")}`)).json();
+    if(r.id)return{id:r.id.split("/").pop(),nome:r.display_name,exato:true};
+  }
+  const r=await (await fetch(`${API}/authors?search=${encodeURIComponent(p.nome)}&per-page=1${mail}`)).json();
+  const a=r.results&&r.results[0];
+  return a?{id:a.id.split("/").pop(),nome:a.display_name,exato:false}:null;
+}
+async function findWorks(aid,ano){
+  let page=1,all=[];
+  while(page<=5){
+    const u=`${API}/works?filter=authorships.author.id:${aid},from_publication_date:${ano}-01-01`+
+      `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
+    const r=await (await fetch(u)).json();
+    all=all.concat(r.results||[]);
+    if(!r.results||r.results.length<100)break;page++;
+  }
+  return all.map(w=>({id:w.id,doi:w.doi,titulo:w.title||"(sem título)",ano:w.publication_year,
+    tipo:w.type,veiculo:(w.primary_location&&w.primary_location.source&&w.primary_location.source.display_name)||"—"}));
+}
+const tipoPT=t=>({article:"Periódico","proceedings-article":"Congresso",book:"Livro","book-chapter":"Capítulo",preprint:"Preprint",dissertation:"Tese/Dissertação"}[t]||t||"Outro");
+const link=w=>w.doi?`<a href="${esc(w.doi)}" target="_blank" rel="noopener">${esc(w.titulo)}</a>`:esc(w.titulo);
+
+function renderPerson(p,a,ws){
+  const porTipo={};ws.forEach(w=>{const k=tipoPT(w.tipo);porTipo[k]=(porTipo[k]||0)+1});
+  const resumo=Object.entries(porTipo).map(([k,v])=>`${k}: ${v}`).join(" · ")||"sem registros";
+  const aviso=!a?`<p class="warn">Autor não encontrado no OpenAlex.</p>`:
+    a.exato?"":`<p class="warn">Correspondência por nome (“${esc(a.nome)}”). Para evitar homônimos, preencha o ORCID na planilha.</p>`;
+  return `<div class="card"><h3>${esc(p.nome)}</h3>
+  <div class="mut">${esc(p.nivel)} · ingresso em ${p.ano} · <b>${ws.length}</b> publicações desde o ingresso (${resumo})</div>${aviso}
+  <div class="wrap"><table><tr><th>Ano</th><th>Título</th><th>Tipo</th><th>Revista / Congresso</th></tr>
+  ${ws.sort((x,y)=>y.ano-x.ano).map(w=>`<tr><td>${w.ano}</td><td>${link(w)}</td><td>${tipoPT(w.tipo)}</td><td>${esc(w.veiculo)}</td></tr>`).join("")}
+  </table></div></div>`;
+}
+function renderGeral(map){
+  const L=[...map.values()].sort((a,b)=>b.ano-a.ano);
+  const porTipo={},porAno={},porVeic={};
+  L.forEach(w=>{const k=tipoPT(w.tipo);porTipo[k]=(porTipo[k]||0)+1;porAno[w.ano]=(porAno[w.ano]||0)+1;porVeic[w.veiculo]=(porVeic[w.veiculo]||0)+1});
+  const tops=Object.entries(porVeic).sort((a,b)=>b[1]-a[1]).slice(0,15);
+  $("geral").className="";
+  $("geral").innerHTML=`<div class="tot"><div><b>${L.length}</b>publicações únicas</div>
+  ${Object.entries(porTipo).map(([k,v])=>`<div><b>${v}</b>${k}</div>`).join("")}</div>
+  <div class="mut">Por ano: ${Object.entries(porAno).sort().reverse().map(([k,v])=>`${k} (${v})`).join(" · ")}</div>
+  <h3 style="margin-top:16px">Principais veículos</h3>
+  <div class="wrap"><table><tr><th>Revista / Congresso</th><th>Nº</th></tr>${tops.map(([k,v])=>`<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}</table></div>
+  <h3 style="margin-top:16px">Todas as publicações</h3>
+  <div class="wrap"><table><tr><th>Ano</th><th>Título</th><th>Tipo</th><th>Veículo</th><th>Autores do lab</th></tr>
+  ${L.map(w=>`<tr><td>${w.ano}</td><td>${link(w)}</td><td>${tipoPT(w.tipo)}</td><td>${esc(w.veiculo)}</td><td>${esc(w.autores.join("; "))}</td></tr>`).join("")}</table></div>`;
+}
+$("go").onclick=async()=>{
+  $("go").disabled=true;$("ind").innerHTML="";rows=[];
+  try{
+    $("st").textContent=" Lendo planilha…";
+    const people=await loadPeople();
+    const geral=new Map();
+    for(let i=0;i<people.length;i++){
+      const p=people[i];$("st").textContent=` Buscando ${i+1}/${people.length}: ${p.nome}`;
+      let a=null,ws=[];
+      try{a=await findAuthor(p);if(a)ws=await findWorks(a.id,p.ano)}catch(e){}
+      $("ind").insertAdjacentHTML("beforeend",renderPerson(p,a,ws));
+      ws.forEach(w=>{
+        if(!geral.has(w.id))geral.set(w.id,{...w,autores:[]});
+        geral.get(w.id).autores.push(p.nome);
+        rows.push([p.nome,p.nivel,p.ano,w.ano,w.titulo,tipoPT(w.tipo),w.veiculo,w.doi||""]);
+      });
+    }
+    renderGeral(geral);
+    $("st").textContent=" Concluído em "+new Date().toLocaleString("pt-BR");
+    $("csv").disabled=false;
+  }catch(e){$("st").textContent=" Erro: "+e.message}
+  $("go").disabled=false;
+};
+$("csv").onclick=()=>{
+  const h=["Pessoa","Nível","Ingresso","Ano pub.","Título","Tipo","Veículo","DOI"];
+  const t=[h,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob(["\ufeff"+t],{type:"text/csv"}));
+  a.download="publicacoes-laboratorio.csv";a.click();
+};
+</script>
+</body>
+</html>
