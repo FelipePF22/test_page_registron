@@ -41,8 +41,6 @@ const CONFIG = {
   ABA_PUBLICACOES: "Publicações", // nome da aba de registro manual (opcional)
   EMAIL: "felipefurlaneto01@gmail.com" // opcional, melhora a fila de requisições do OpenAlex
 };
-// Aba 1 (pessoas): Nome completo | Nível | Ano de ingresso | ORCID (opcional) | Google Acadêmico (opcional)
-// Aba "Publicações" (manual): Pessoa | Título | Ano | Tipo | Veículo | Link ou DOI
 // ============================================
 const $=id=>document.getElementById(id);
 const API="https://api.openalex.org";
@@ -69,22 +67,35 @@ function parseCSV(t){
 async function getJSON(u){
   try{const r=await fetch(u);if(!r.ok)return null;return await r.json()}catch(e){return null}
 }
+
 async function loadPeople(){
   const res=await fetch(`${GV}&gid=${CONFIG.ABA_PESSOAS_GID}`);
   if(!res.ok)throw new Error("Erro HTTP "+res.status+" ao ler a planilha.");
   const txt=await res.text();
   const t=parseCSV(txt);
+  
+  // Lê o cabeçalho na linha 5 (índice 4)
   const h=(t[4]||[]).map(norm);
   const col=k=>h.findIndex(x=>x.includes(k));
-  const iN=col("nome"),iL=col("nivel"),iA=col("ano"),iO=col("orcid"),iG=col("academico");
-  if(iN<0||iA<0)throw new Error("Link não devolveu CSV: "+txt.slice(0,80).replace(/</g,"&lt;"));
-  const ppl=t.slice(1).filter(r=>r[iN]&&r[iN].trim()).map(r=>({
-    nome:r[iN].trim(),nivel:(r[iL]||"").trim(),
-    ano:parseInt(r[iA])||1900,orcid:iO>=0?(r[iO]||"").trim():"",
-    scholar:iG>=0?(r[iG]||"").trim():""}));
+  
+  // Busca as colunas exatas da sua planilha
+  const iN=col("nome como publicado"),iL=col("nivel"),iA=col("ano de ingresso"),iO=col("orcid"),iG=col("academico");
+  
+  if(iN<0||iA<0)throw new Error("Link não devolveu CSV ou cabeçalho não encontrado. Verifique os nomes das colunas.");
+  
+  // Lê os dados a partir da linha 6 (índice 5)
+  const ppl=t.slice(5).filter(r=>r[iN]&&r[iN].trim()).map(r=>({
+    nome:r[iN].trim(),
+    nivel:(r[iL]||"").trim(),
+    ano:parseInt(r[iA])||1900,
+    orcid:iO>=0?(r[iO]||"").trim():"",
+    scholar:iG>=0?(r[iG]||"").trim():""
+  }));
+  
   if(!ppl.length)throw new Error("Planilha lida, mas sem linhas de pessoas.");
   return ppl;
 }
+
 function tipoManual(s){
   const n=norm(s);
   if(/congress|evento|simpos|conferenc|anais|proceeding|encontro/.test(n))return"proceedings-article";
@@ -95,6 +106,7 @@ function tipoManual(s){
   if(/tese|dissert/.test(n))return"dissertation";
   return s||"outro";
 }
+
 async function loadManual(){
   try{
     const res=await fetch(`${GV}&sheet=${encodeURIComponent(CONFIG.ABA_PUBLICACOES)}`);
@@ -110,6 +122,7 @@ async function loadManual(){
       doi:(iL>=0&&r[iL]||"").trim(),fonte:"Manual"}));
   }catch(e){return[]}
 }
+
 async function findAuthor(p){
   if(p.orcid){
     const id=p.orcid.replace(/^https?:\/\/orcid.org\//,"");
@@ -120,10 +133,12 @@ async function findAuthor(p){
   const a=r&&r.results&&r.results[0];
   return a?{id:a.id.split("/").pop(),nome:a.display_name,exato:false}:null;
 }
+
 async function findWorks(aid,ano){
   let page=1,all=[];
   while(page<=5){
-    const u = `${API}/works?filter=raw_author_name.search:${encodeURIComponent(p.nome)},from_publication_date:${ano}-01-01` +
+    // CORREÇÃO: Agora usa o ID do autor (aid) em vez do nome, evitando homônimos e erros.
+    const u = `${API}/works?filter=author.id:${aid},from_publication_date:${ano}-01-01` +
   `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
     const r=await getJSON(u);
     if(!r||!r.results)break;
@@ -134,6 +149,7 @@ async function findWorks(aid,ano){
     tipo:w.type,fonte:"OpenAlex",
     veiculo:(w.primary_location&&w.primary_location.source&&w.primary_location.source.display_name)||"—"}));
 }
+
 const tipoPT=t=>({article:"Periódico","proceedings-article":"Congresso",book:"Livro","book-chapter":"Capítulo",preprint:"Preprint",dissertation:"Tese/Dissertação"}[t]||t||"Outro");
 const link=w=>w.doi?`<a href="${esc(/^http/.test(w.doi)?w.doi:"https://doi.org/"+w.doi)}" target="_blank" rel="noopener">${esc(w.titulo)}</a>`:esc(w.titulo);
 
@@ -149,6 +165,7 @@ function renderPerson(p,a,ws,nManual){
   ${ws.sort((x,y)=>y.ano-x.ano).map(w=>`<tr><td>${w.ano||"—"}</td><td>${link(w)}</td><td>${tipoPT(w.tipo)}</td><td>${esc(w.veiculo)}</td><td>${w.fonte}</td></tr>`).join("")}
   </table></div></div>`;
 }
+
 function renderGeral(map){
   const L=[...map.values()].sort((a,b)=>b.ano-a.ano);
   const porTipo={},porAno={},porVeic={};
@@ -164,6 +181,7 @@ function renderGeral(map){
   <div class="wrap"><table><tr><th>Ano</th><th>Título</th><th>Tipo</th><th>Veículo</th><th>Autores do lab</th></tr>
   ${L.map(w=>`<tr><td>${w.ano||"—"}</td><td>${link(w)}</td><td>${tipoPT(w.tipo)}</td><td>${esc(w.veiculo)}</td><td>${esc(w.autores.join("; "))}</td></tr>`).join("")}</table></div>`;
 }
+
 $("go").onclick=async()=>{
   $("go").disabled=true;$("ind").innerHTML="";rows=[];
   try{
@@ -192,6 +210,7 @@ $("go").onclick=async()=>{
   }catch(e){console.error(e);$("st").textContent=" Erro: "+e.message}
   $("go").disabled=false;
 };
+
 $("csv").onclick=()=>{
   const h=["Pessoa","Nível","Ingresso","Ano pub.","Título","Tipo","Veículo","DOI/Link","Fonte"];
   const t=[h,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
