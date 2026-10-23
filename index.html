@@ -25,7 +25,7 @@ a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
 </head>
 <body>
 <h1>Painel de Publicações do Laboratório</h1>
-<p class="mut">Nomes: aba “Página1” da planilha. Publicações: OpenAlex (automático com validação de ORCID) + aba “Publicações” da planilha (registro manual).</p>
+<p class="mut">Nomes: aba “Página1” da planilha. Publicações: OpenAlex (automático) + aba “Publicações” da planilha (registro manual, para o que o OpenAlex não indexa, como congressos nacionais).</p>
 <button id="go">Atualizar levantamento</button> <button id="csv" disabled>Exportar CSV</button>
 <span id="st" class="mut"></span>
 
@@ -34,13 +34,15 @@ a{color:var(--ac)}.warn{color:#b54708;font-size:13px}
 <div id="geral" class="mut">Clique em “Atualizar levantamento”.</div>
 
 <script>
-// ===== CONFIGURAÇÃO =====
+// ===== CONFIGURAÇÃO (edite apenas aqui) =====
 const CONFIG = {
-  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas", 
-  ABA_PESSOAS_GID: "0",          
-  ABA_PUBLICACOES: "Publicações", 
-  EMAIL: "felipefurlaneto01@gmail.com" 
+  SHEET_ID: "1Fa7hXe-Zt5CYW7AzjRCpQ0UGx7e2p3n-TzpV1etQgas", // ID da planilha (compartilhada como "Qualquer pessoa com o link")
+  ABA_PESSOAS_GID: "0",          // gid da aba com os nomes (Página1)
+  ABA_PUBLICACOES: "Publicações", // nome da aba de registro manual (opcional)
+  EMAIL: "felipefurlaneto01@gmail.com" // opcional, melhora a fila de requisições do OpenAlex
 };
+// Aba 1 (pessoas): Nome Como Publicado | Nível Academico | Ano de Ingresso | ORCID (se aplicavel) | Google Acadêmico (opcional)
+// Aba "Publicações" (manual): Pessoa | Título | Ano | Tipo | Veículo | Link ou DOI
 // ============================================
 const $=id=>document.getElementById(id);
 const API="https://api.openalex.org";
@@ -64,11 +66,9 @@ function parseCSV(t){
   if(c||r.length){r.push(c);out.push(r)}
   return out;
 }
-
 async function getJSON(u){
   try{const r=await fetch(u);if(!r.ok)return null;return await r.json()}catch(e){return null}
 }
-
 async function loadPeople(){
   const res=await fetch(`${GV}&gid=${CONFIG.ABA_PESSOAS_GID}`);
   if(!res.ok)throw new Error("Erro HTTP "+res.status+" ao ler a planilha.");
@@ -77,6 +77,7 @@ async function loadPeople(){
   const h=(t[0]||[]).map(norm);
   const col=k=>h.findIndex(x=>x.includes(k));
   
+  // CORREÇÃO DOS CABEÇALHOS
   const iN=col("nome como"), iL=col("nivel"), iA=col("ingresso"), iO=col("orcid"), iG=col("academico");
   
   if(iN<0||iA<0)throw new Error("Link não devolveu CSV: "+txt.slice(0,80).replace(/</g,"&lt;"));
@@ -87,7 +88,6 @@ async function loadPeople(){
   if(!ppl.length)throw new Error("Planilha lida, mas sem linhas de pessoas.");
   return ppl;
 }
-
 function tipoManual(s){
   const n=norm(s);
   if(/congress|evento|simpos|conferenc|anais|proceeding|encontro/.test(n))return"proceedings-article";
@@ -98,7 +98,6 @@ function tipoManual(s){
   if(/tese|dissert/.test(n))return"dissertation";
   return s||"outro";
 }
-
 async function loadManual(){
   try{
     const res=await fetch(`${GV}&sheet=${encodeURIComponent(CONFIG.ABA_PUBLICACOES)}`);
@@ -107,7 +106,7 @@ async function loadManual(){
     const h=(t[0]||[]).map(norm);
     const col=(...ks)=>h.findIndex(x=>ks.some(k=>x.includes(k)));
     const iP=col("pessoa","nome"),iT=col("titulo"),iA=col("ano"),iTp=col("tipo"),iV=col("veiculo","revista","congresso"),iL=col("link","doi");
-    if(iP<0||iT<0)return[]; 
+    if(iP<0||iT<0)return[]; // aba inexistente ou com outro formato
     return t.slice(1).filter(r=>r[iP]&&r[iT]&&r[iT].trim()).map(r=>({
       pessoa:norm(r[iP]),titulo:r[iT].trim(),ano:parseInt(r[iA])||0,
       tipo:tipoManual(iTp>=0?r[iTp]:""),veiculo:(iV>=0&&r[iV]||"").trim()||"—",
@@ -115,67 +114,54 @@ async function loadManual(){
   }catch(e){return[]}
 }
 
-// 1. BUSCA O AUTOR NO OPENALEX (Pelo ORCID ou, se falhar, pelo Nome)
+// CORREÇÃO DO ORCID
 async function findAuthor(p){
   let idOrcid = "";
   if(p.orcid){
     idOrcid = p.orcid.trim().replace(/^https?:\/\/orcid.org\//,"").replace(/\s/g, "");
     const r = await getJSON(`${API}/authors/orcid:${idOrcid}?select=id,display_name${mail}`);
-    if(r && r.id) return { id: r.id.split("/").pop(), nome: r.display_name, exato: true, orcid: idOrcid };
+    if(r && r.id) return { id: r.id.split("/").pop(), nome: r.display_name, exato: true };
   }
   
-  const r = await getJSON(`${API}/authors?search=${encodeURIComponent(p.nome)}&per-page=5${mail}`);
-  if(r && r.results && r.results.length > 0) {
-    const a = r.results[0];
-    return { id: a.id.split("/").pop(), nome: a.display_name, exato: false, orcid: idOrcid };
+  const r = await getJSON(`${API}/authors?search=${encodeURIComponent(p.nome)}&per-page=1${mail}`);
+  const a = r && r.results && r.results[0];
+  
+  if(a) {
+    return { 
+      id: a.id.split("/").pop(), 
+      nome: a.display_name, 
+      exato: false,
+      orcidFornecido: !!idOrcid
+    };
   }
   return null;
 }
 
-// 2. BUSCA OS TRABALHOS E VALIDA SE O ORCID ESTÁ NELES
-async function findWorks(aid,ano,orcidPlanilha){
+async function findWorks(aid,ano){
   let page=1,all=[];
   while(page<=5){
-    // Pede os dados dos autores no artigo também (authorships) para validar o ORCID
     const u=`${API}/works?filter=authorships.author.id:${aid},from_publication_date:${ano}-01-01`+
-      `&select=id,doi,title,publication_year,type,primary_location,authorships&per-page=100&page=${page}${mail}`;
+      `&select=id,doi,title,publication_year,type,primary_location&per-page=100&page=${page}${mail}`;
     const r=await getJSON(u);
     if(!r||!r.results)break;
     all=all.concat(r.results);
     if(r.results.length<100)break;page++;
   }
-  
-  return all.map(w=>{
-    // Validação do ORCID: O artigo tem o ORCID que está na planilha?
-    let orcidValido = false;
-    if (orcidPlanilha && w.authorships) {
-      const autorArtigos = w.authorships.find(a => a.author && a.author.id && a.author.id.includes(aid));
-      if (autorArtigos && autorArtigos.author.orcid) {
-        const orcidArtigo = autorArtigos.author.orcid.replace(/^https?:\/\/orcid.org\//,"");
-        if (orcidArtigo === orcidPlanilha) {
-          orcidValido = true;
-        }
-      }
-    }
-
-    return {
-      id:w.id,doi:w.doi||"",titulo:w.title||"(sem título)",ano:w.publication_year,
-      tipo:w.type,fonte: orcidValido ? "OpenAlex (ORCID ✓)" : "OpenAlex",
-      veiculo:(w.primary_location&&w.primary_location.source&&w.primary_location.source.display_name)||"—"
-    };
-  });
+  return all.map(w=>({id:w.id,doi:w.doi||"",titulo:w.title||"(sem título)",ano:w.publication_year,
+    tipo:w.type,fonte:"OpenAlex",
+    veiculo:(w.primary_location&&w.primary_location.source&&w.primary_location.source.display_name)||"—"}));
 }
-
 const tipoPT=t=>({article:"Periódico","proceedings-article":"Congresso",book:"Livro","book-chapter":"Capítulo",preprint:"Preprint",dissertation:"Tese/Dissertação"}[t]||t||"Outro");
 const link=w=>w.doi?`<a href="${esc(/^http/.test(w.doi)?w.doi:"https://doi.org/"+w.doi)}" target="_blank" rel="noopener">${esc(w.titulo)}</a>`:esc(w.titulo);
 
+// CORREÇÃO DO AVISO NA TELA
 function renderPerson(p,a,ws,nManual){
   const porTipo={};ws.forEach(w=>{const k=tipoPT(w.tipo);porTipo[k]=(porTipo[k]||0)+1});
   const resumo=Object.entries(porTipo).map(([k,v])=>`${k}: ${v}`).join(" · ")||"sem registros";
   
   let aviso = "";
   if (!a) {
-    aviso = `<p class="warn">Autor não encontrado no OpenAlex.</p>`;
+    aviso = `<p class="warn">Autor não encontrado no OpenAlex (use a aba “Publicações” para registrar manualmente).</p>`;
   }
 
   const sch=/^https?:/.test(p.scholar)?` · <a href="${esc(p.scholar)}" target="_blank" rel="noopener">Google Acadêmico</a>`:"";
@@ -186,7 +172,6 @@ function renderPerson(p,a,ws,nManual){
   ${ws.sort((x,y)=>y.ano-x.ano).map(w=>`<tr><td>${w.ano||"—"}</td><td>${link(w)}</td><td>${tipoPT(w.tipo)}</td><td>${esc(w.veiculo)}</td><td>${w.fonte}</td></tr>`).join("")}
   </table></div></div>`;
 }
-
 function renderGeral(map){
   const L=[...map.values()].sort((a,b)=>b.ano-a.ano);
   const porTipo={},porAno={},porVeic={};
@@ -202,32 +187,21 @@ function renderGeral(map){
   <div class="wrap"><table><tr><th>Ano</th><th>Título</th><th>Tipo</th><th>Veículo</th><th>Autores do lab</th></tr>
   ${L.map(w=>`<tr><td>${w.ano||"—"}</td><td>${link(w)}</td><td>${tipoPT(w.tipo)}</td><td>${esc(w.veiculo)}</td><td>${esc(w.autores.join("; "))}</td></tr>`).join("")}</table></div>`;
 }
-
 $("go").onclick=async()=>{
   $("go").disabled=true;$("ind").innerHTML="";rows=[];
   try{
     $("st").textContent=" Lendo planilha…";
     const [people,manual]=await Promise.all([loadPeople(),loadManual()]);
     const geral=new Map();
-    
     for(let i=0;i<people.length;i++){
       const p=people[i];$("st").textContent=` Buscando ${i+1}/${people.length}: ${p.nome}`;
       let a=null,auto=[];
-      
-      try{
-        a=await findAuthor(p);
-        if(a){
-          auto=await findWorks(a.id,p.ano,a.orcid);
-        }
-      }catch(e){console.error(e)}
-      
+      try{a=await findAuthor(p);if(a)auto=await findWorks(a.id,p.ano)}catch(e){console.error(e)}
+      // junta automático + manual, sem duplicar (DOI ou título)
       const seen=new Set(),ws=[];
       const man=manual.filter(m=>m.pessoa===norm(p.nome)&&(!m.ano||m.ano>=p.ano));
-      
       [...auto,...man].forEach(w=>{const k=keyOf(w);if(seen.has(k))return;seen.add(k);ws.push(w)});
-      
       $("ind").insertAdjacentHTML("beforeend",renderPerson(p,a,ws,man.length));
-      
       ws.forEach(w=>{
         const k=keyOf(w);
         if(!geral.has(k))geral.set(k,{...w,autores:[]});
@@ -241,7 +215,6 @@ $("go").onclick=async()=>{
   }catch(e){console.error(e);$("st").textContent=" Erro: "+e.message}
   $("go").disabled=false;
 };
-
 $("csv").onclick=()=>{
   const h=["Pessoa","Nível","Ingresso","Ano pub.","Título","Tipo","Veículo","DOI/Link","Fonte"];
   const t=[h,...rows].map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
